@@ -248,41 +248,45 @@ bool Engine::loadNetwork() {
     // Storage for holding the input and output buffers
     // This will be passed to TensorRT for inference
     //TODO: rollback libnvinfer API to TensorRT 8.2.1.9
-    //TODO: Needs a way to dynamically get input and output buffer size
-    int32_t nb_io_tensors = 2;
-    m_buffers.resize(nb_io_tensors);
-    // Tensor shape is (bs, chan, height, width)
-    nvinfer1::Dims4 inp_tensor_shape = {1, 3, 640, 640};
-    nvinfer1::Dims3 out_tensor_shape = {1, 84, 8400};
-    // Input and output tensor name
-    m_IOTensorNames.emplace_back("images");
-    m_IOTensorNames.emplace_back("output0");
+    m_buffers.resize(m_engine->getNbBindings());
 
     // Allocate GPU memory for input and output buffers
     // Create a cuda stream
     cudaStream_t stream;
     checkCudaErrorCode(cudaStreamCreate(&stream));
-    // Define
-    // Allocate input
-    size_t input_mem_size = m_options.maxBatchSize * \
-        inp_tensor_shape.d[1] * inp_tensor_shape.d[2] * inp_tensor_shape.d[3] * sizeof(float);
-        // cudaMemcpyAsync
-    checkCudaErrorCode(cudaMallocManaged(&m_buffers[0], input_mem_size));
-    checkCudaErrorCode(cudaStreamAttachMemAsync(stream, m_buffers[0], 0, cudaMemAttachGlobal));
-    m_inputDims.emplace_back(inp_tensor_shape.d[1], inp_tensor_shape.d[2], inp_tensor_shape.d[3]);
-    // Allocate output
+
+    // Allocate GPU memory for input and output buffers
     m_outputLengthsFloat.clear();
-    m_outputDims.push_back(out_tensor_shape);
-    uint32_t outputLenFloat = 1;
-    for (int j = 1; j < out_tensor_shape.nbDims; ++j) {
-        // We ignore j = 0 because that is the batch size, and we will take that into account when sizing the buffer
-        outputLenFloat *= out_tensor_shape.d[j];
+    for (int i = 0; i < m_engine->getNbBindings(); ++i) {
+        const auto tensorName = m_engine->getBindingName(i);
+        m_IOTensorNames.emplace_back(tensorName);
+        const auto tensorShape = m_engine->getBindingDimensions(i);
+        if (m_engine->bindingIsInput(i)) {
+            // Allocate memory for the input
+            size_t input_mem_size = m_options.maxBatchSize * \
+        		tensorShape.d[1] * tensorShape.d[2] * tensorShape.d[3] * sizeof(float);
+        	// cudaMemcpyAsync
+			checkCudaErrorCode(cudaMallocManaged(&m_buffers[0], input_mem_size));
+   			checkCudaErrorCode(cudaStreamAttachMemAsync(stream, m_buffers[0], 0, cudaMemAttachGlobal));
+            // Store the input dims for later use
+            m_inputDims.emplace_back(tensorShape.d[1], tensorShape.d[2], tensorShape.d[3]);
+        } else {
+            // The binding is an output
+            uint32_t outputLenFloat = 1;
+            m_outputDims.push_back(tensorShape);
+
+            for (int j = 1; j < tensorShape.nbDims; ++j) {
+                // We ignore j = 0 because that is the batch size, and we will take that into account when sizing the buffer
+                outputLenFloat *= tensorShape.d[j];
+            }
+
+            m_outputLengthsFloat.push_back(outputLenFloat);
+            // Now size the output buffer appropriately, taking into account the max possible batch size (although we could actually end up using less memory)
+			size_t output_mem_size = m_options.maxBatchSize * outputLenFloat * sizeof(float);
+    		checkCudaErrorCode(cudaMallocManaged(&m_buffers[1], output_mem_size));
+    		checkCudaErrorCode(cudaStreamAttachMemAsync(stream, m_buffers[1], 0, cudaMemAttachGlobal));
+		}
     }
-    m_outputLengthsFloat.push_back(outputLenFloat);
-    // Now size the output buffer appropriately, taking into account the max possible batch size (although we could actually end up using less memory)
-    size_t output_mem_size = m_options.maxBatchSize * outputLenFloat * sizeof(float);
-    checkCudaErrorCode(cudaMallocManaged(&m_buffers[1], output_mem_size));
-    checkCudaErrorCode(cudaStreamAttachMemAsync(stream, m_buffers[1], 0, cudaMemAttachGlobal));
 
     // Synchronize and destroy the cuda stream
     checkCudaErrorCode(cudaStreamSynchronize(stream));

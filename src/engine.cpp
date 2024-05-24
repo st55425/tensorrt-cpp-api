@@ -263,11 +263,10 @@ bool Engine::loadNetwork() {
         const auto tensorShape = m_engine->getBindingDimensions(i);
         if (m_engine->bindingIsInput(i)) {
             // Allocate memory for the input
-            size_t input_mem_size = m_options.maxBatchSize * \
-        		tensorShape.d[1] * tensorShape.d[2] * tensorShape.d[3] * sizeof(float);
+            size_t input_mem_size = m_options.maxBatchSize * tensorShape.d[1] * tensorShape.d[2] * tensorShape.d[3] * sizeof(float);
         	// cudaMemcpyAsync
-			checkCudaErrorCode(cudaMallocManaged(&m_buffers[0], input_mem_size));
-   			checkCudaErrorCode(cudaStreamAttachMemAsync(stream, m_buffers[0], 0, cudaMemAttachGlobal));
+			checkCudaErrorCode(cudaMallocManaged(&m_buffers[i], input_mem_size));
+   			checkCudaErrorCode(cudaStreamAttachMemAsync(stream, m_buffers[i], 0, cudaMemAttachGlobal));
             // Store the input dims for later use
             m_inputDims.emplace_back(tensorShape.d[1], tensorShape.d[2], tensorShape.d[3]);
         } else {
@@ -283,8 +282,8 @@ bool Engine::loadNetwork() {
             m_outputLengthsFloat.push_back(outputLenFloat);
             // Now size the output buffer appropriately, taking into account the max possible batch size (although we could actually end up using less memory)
 			size_t output_mem_size = m_options.maxBatchSize * outputLenFloat * sizeof(float);
-    		checkCudaErrorCode(cudaMallocManaged(&m_buffers[1], output_mem_size));
-    		checkCudaErrorCode(cudaStreamAttachMemAsync(stream, m_buffers[1], 0, cudaMemAttachGlobal));
+    		checkCudaErrorCode(cudaMallocManaged(&m_buffers[i], output_mem_size));
+    		checkCudaErrorCode(cudaStreamAttachMemAsync(stream, m_buffers[i], 0, cudaMemAttachGlobal));
 		}
     }
 
@@ -374,7 +373,7 @@ bool Engine::runInference(const std::vector<std::vector<cv::cuda::GpuMat>> &inpu
     }
 
     // Run inference.
-    void* bindings[] = {m_buffers[0], m_buffers[1]};
+    void** bindings = m_buffers.data();
     bool status = m_context->enqueueV2(bindings, inferenceCudaStream, nullptr);
     if (!status) {
         return false;
